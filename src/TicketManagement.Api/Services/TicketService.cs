@@ -8,6 +8,30 @@ namespace TicketManagement.Api.Services;
 
 public class TicketService(AppDbContext db) : ITicketService
 {
+    public async Task<TicketStatisticsDto> GetStatisticsAsync(CancellationToken cancellationToken)
+    {
+        var statusCounts = await db.Tickets.AsNoTracking()
+            .GroupBy(ticket => ticket.Status)
+            .Select(group => new TicketStatusCountDto(group.Key, group.Count()))
+            .ToListAsync(cancellationToken);
+
+        var priorityCounts = await db.Tickets.AsNoTracking()
+            .GroupBy(ticket => ticket.Priority)
+            .Select(group => new TicketPriorityCountDto(group.Key, group.Count()))
+            .ToListAsync(cancellationToken);
+
+        var countsByStatus = statusCounts.ToDictionary(item => item.Status, item => item.Count);
+        var countsByPriority = priorityCounts.ToDictionary(item => item.Priority, item => item.Count);
+
+        return new TicketStatisticsDto(
+            Enum.GetValues<TicketStatus>()
+                .Select(status => new TicketStatusCountDto(status, countsByStatus.GetValueOrDefault(status)))
+                .ToArray(),
+            Enum.GetValues<TicketPriority>()
+                .Select(priority => new TicketPriorityCountDto(priority, countsByPriority.GetValueOrDefault(priority)))
+                .ToArray());
+    }
+
     // Section 1: paging, combined filtering, text search, sorting by at least three fields.
     public async Task<PagedResult<TicketDto>> GetTicketsAsync(TicketQueryParameters query, CancellationToken cancellationToken)
     {

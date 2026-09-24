@@ -1,0 +1,21 @@
+* { box-sizing: border-box; }
+
+html, body {
+	min-width: 320px;
+	min-height: 100%;
+	margin: 0;
+}
+
+body {
+	color: #202b2a;
+	background: #f3f7f5;
+	font-family: 'Heebo', sans-serif;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+button, input, select { font: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+	outline: 3px solid #85b7ac;
+	outline-offset: 2px;
+}

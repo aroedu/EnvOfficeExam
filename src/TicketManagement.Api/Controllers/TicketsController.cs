@@ -17,6 +17,13 @@ public class TicketsController(ITicketService ticketService) : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("statistics")]
+    public async Task<ActionResult<TicketStatisticsDto>> GetStatistics(CancellationToken cancellationToken)
+    {
+        var statistics = await ticketService.GetStatisticsAsync(cancellationToken);
+        return Ok(statistics);
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<TicketDto>> GetTicket(Guid id, CancellationToken cancellationToken)
     {
@@ -47,6 +54,16 @@ public class TicketsController(ITicketService ticketService) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<BulkStatusUpdateItemResult>>> BulkUpdateStatus(
         [FromBody] IReadOnlyList<BulkStatusUpdateItem> items, CancellationToken cancellationToken)
     {
+        if (items.Count > 100)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Bulk request exceeds the limit",
+                Detail = "A maximum of 100 tickets can be updated per request."
+            });
+        }
+
         var results = await ticketService.BulkUpdateStatusAsync(items, cancellationToken);
         return Ok(results);
     }

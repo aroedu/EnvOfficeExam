@@ -4,6 +4,8 @@ namespace TicketManagement.Api.Services;
 
 public interface ITicketService
 {
+    Task<TicketStatisticsDto> GetStatisticsAsync(CancellationToken cancellationToken);
+
     Task<PagedResult<TicketDto>> GetTicketsAsync(TicketQueryParameters query, CancellationToken cancellationToken);
 
     Task<TicketDto> GetTicketByIdAsync(Guid id, CancellationToken cancellationToken);

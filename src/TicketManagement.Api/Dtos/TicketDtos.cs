@@ -39,3 +39,11 @@ public record BulkStatusUpdateItem(Guid TicketId, TicketStatus NewStatus, int Ve
 public record BulkStatusUpdateItemResult(Guid TicketId, bool Success, string? Error);
 
 public record TicketAuditLogDto(TicketStatus OldStatus, TicketStatus NewStatus, string? ChangedBy, DateTimeOffset ChangedAt);
+
+public record TicketStatisticsDto(
+    IReadOnlyList<TicketStatusCountDto> ByStatus,
+    IReadOnlyList<TicketPriorityCountDto> ByPriority);
+
+public record TicketStatusCountDto(TicketStatus Status, int Count);
+
+public record TicketPriorityCountDto(TicketPriority Priority, int Count);

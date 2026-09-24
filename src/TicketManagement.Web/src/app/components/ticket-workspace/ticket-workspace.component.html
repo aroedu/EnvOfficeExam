@@ -1,0 +1,242 @@
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="מוקד פניות - ראשי">
+      <span class="brand-mark"><svg lucideTicketCheck [size]="21"></svg></span>
+      <span class="brand-copy"><strong>מרכז פניות</strong><small>שירות לארגונים</small></span>
+    </a>
+    <div class="topbar-meta"><span class="live-dot"></span><span>מערכת תפעולית</span></div>
+  </header>
+
+  <main class="workspace">
+    <section class="page-heading">
+      <div>
+        <p class="eyebrow">ניהול שירות · סביבת עבודה</p>
+        <h1>תיבת הפניות</h1>
+        <p class="heading-copy">חיפוש, מיון ועדכון פניות ארגונים במקום אחד.</p>
+      </div>
+      <button class="icon-button refresh-button" type="button" (click)="refresh()" title="רענון נתונים" aria-label="רענון נתונים">
+        <svg lucideRefreshCw [size]="17"></svg>
+      </button>
+    </section>
+
+    <section class="overview" aria-label="סיכום פניות">
+      <div class="overview-total">
+        <span class="overview-icon"><svg lucideChartNoAxesColumn [size]="19"></svg></span>
+        <div><span class="metric-label">סך הפניות</span><strong>{{ statsLoading() ? '...' : totalTickets() }}</strong></div>
+        <span class="overview-divider"></span>
+        <div class="high-priority"><span class="priority-dot"></span><span>עדיפות גבוהה</span><strong>{{ statsLoading() ? '...' : highPriorityCount() }}</strong></div>
+      </div>
+      <div class="status-metrics">
+        @for (status of statuses; track status) {
+          <article class="status-metric" [class]="'status-metric status-metric-' + status.toLowerCase()">
+            <span class="metric-label">{{ statusLabel(status) }}</span>
+            <strong>{{ statsLoading() ? '—' : statusCount(status) }}</strong>
+          </article>
+        }
+      </div>
+    </section>
+
+    @if (statsError()) {
+      <div class="inline-error" role="status">
+        <svg lucideCircleAlert [size]="17"></svg><span>{{ statsError() }}</span>
+        <button type="button" class="text-button" (click)="refresh()">לנסות שוב</button>
+      </div>
+    }
+
+    <form class="filter-bar" [formGroup]="filters" (submit)="$event.preventDefault()">
+      <label class="search-field">
+        <svg lucideSearch [size]="18"></svg>
+        <span class="visually-hidden">חיפוש בכותרת או בשם הארגון</span>
+        <input [formControl]="search" type="search" placeholder="חיפוש בכותרת או בשם הארגון" autocomplete="off" />
+        @if (search.value) {
+          <button class="clear-search" type="button" (click)="search.setValue('')" aria-label="ניקוי חיפוש" title="ניקוי חיפוש">
+            <svg lucideX [size]="15"></svg>
+          </button>
+        }
+      </label>
+
+      <label class="filter-control">
+        <span>סטטוס</span>
+        <select formControlName="status" aria-label="סינון לפי סטטוס">
+          <option value="">כל הסטטוסים</option>
+          @for (status of statuses; track status) {
+            <option [value]="status">{{ statusLabel(status) }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="filter-control">
+        <span>עדיפות</span>
+        <select formControlName="priority" aria-label="סינון לפי עדיפות">
+          <option value="">כל העדיפויות</option>
+          @for (priority of priorities; track priority) {
+            <option [value]="priority">{{ priorityLabel(priority) }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="filter-control assigned-filter">
+        <span>מטפל/ת</span>
+        <input formControlName="assignedTo" type="search" placeholder="כל המטפלים" />
+      </label>
+
+      <div class="sort-control">
+        <label class="filter-control sort-field">
+          <span>מיון לפי</span>
+          <select formControlName="sortBy" aria-label="שדה מיון">
+            @for (field of sortFields; track field.value) {
+              <option [value]="field.value">{{ field.label }}</option>
+            }
+          </select>
+        </label>
+        <button class="icon-button direction-button" type="button" (click)="toggleSortDirection()"
+          [title]="filters.controls.sortDescending.value ? 'מיון יורד' : 'מיון עולה'"
+          [attr.aria-label]="filters.controls.sortDescending.value ? 'מיון יורד' : 'מיון עולה'">
+          <svg lucideArrowDownWideNarrow [size]="17"></svg>
+          <span>{{ filters.controls.sortDescending.value ? 'יורד' : 'עולה' }}</span>
+        </button>
+      </div>
+
+      <label class="filter-control page-size-control">
+        <span>בעמוד</span>
+        <select formControlName="pageSize" aria-label="מספר פניות בעמוד">
+          <option [ngValue]="10">10</option>
+          <option [ngValue]="20">20</option>
+          <option [ngValue]="50">50</option>
+          <option [ngValue]="100">100</option>
+        </select>
+      </label>
+
+      <button class="reset-button" type="button" (click)="clearFilters()">
+        <svg lucideSlidersHorizontal [size]="15"></svg><span>איפוס</span>
+      </button>
+    </form>
+
+    @if (actionMessage(); as message) {
+      <div class="action-message" [class.message-error]="message.type === 'error'" [class.message-success]="message.type === 'success'" role="status">
+        @if (message.type === 'error') { <svg lucideCircleAlert [size]="17"></svg> }
+        <span>{{ message.text }}</span>
+        <button type="button" class="message-close" (click)="actionMessage.set(null)" aria-label="סגירת הודעה"><svg lucideX [size]="15"></svg></button>
+      </div>
+    }
+
+    <section class="results-section" aria-label="תוצאות פניות">
+      <div class="results-heading">
+        <div class="results-title"><svg lucideInbox [size]="18"></svg><h2>כל הפניות</h2><span class="result-count">{{ totalCount() }}</span></div>
+        <span class="results-caption">הנתונים נטענים וממוינים בשרת</span>
+      </div>
+
+      @if (listError()) {
+        <div class="state-panel error-state" role="alert">
+          <span class="state-icon"><svg lucideCircleAlert [size]="24"></svg></span>
+          <h3>לא הצלחנו לטעון את הפניות</h3>
+          <p>{{ listError() }}</p>
+          <button class="primary-button" type="button" (click)="refresh()"><svg lucideRefreshCw [size]="16"></svg>לנסות שוב</button>
+        </div>
+      } @else if (loading()) {
+        <div class="loading-state" role="status" aria-live="polite">
+          <span class="spinner"></span><span>טוען פניות...</span>
+          <div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div>
+        </div>
+      } @else if (tickets().length === 0) {
+        <div class="state-panel empty-state">
+          <span class="state-icon"><svg lucideInbox [size]="25"></svg></span>
+          <h3>אין פניות להצגה</h3>
+          <p>נסה לשנות את החיפוש או להסיר חלק מהמסננים.</p>
+          <button class="text-button" type="button" (click)="clearFilters()">ניקוי מסננים</button>
+        </div>
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">פנייה / ארגון</th>
+                <th scope="col">סטטוס</th>
+                <th scope="col">עדיפות</th>
+                <th scope="col">מטפל/ת</th>
+                <th scope="col">עודכן</th>
+                <th scope="col" class="actions-heading">פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (ticket of tickets(); track ticket.id) {
+                <tr>
+                  <td class="ticket-cell">
+                    <strong>{{ ticket.title }}</strong>
+                    <span>{{ ticket.organizationName }}</span>
+                  </td>
+                  <td><span class="status-badge" [class]="'status-badge status-' + ticket.status.toLowerCase()"><span class="status-dot"></span>{{ statusLabel(ticket.status) }}</span></td>
+                  <td><span class="priority-label" [class]="'priority-label priority-' + ticket.priority.toLowerCase()"><span class="priority-dot"></span>{{ priorityLabel(ticket.priority) }}</span></td>
+                  <td class="assignee-cell">{{ ticket.assignedTo || 'לא הוקצה' }}</td>
+                  <td class="date-cell">{{ ticket.updatedAt | date:'dd/MM/yyyy HH:mm' }}</td>
+                  <td class="row-actions">
+                    <button class="icon-button history-button" type="button" (click)="openHistory(ticket)"
+                      [attr.aria-label]="'היסטוריה: ' + ticket.title" title="היסטוריית שינויים">
+                      <svg lucideClock3 [size]="17"></svg>
+                    </button>
+                    @if (nextStatuses[ticket.status].length === 0) {
+                      <span class="terminal-status">{{ statusLabel(ticket.status) }}</span>
+                    } @else {
+                      <label class="visually-hidden" [for]="'status-' + ticket.id">עדכון סטטוס ל{{ ticket.title }}</label>
+                      <select class="status-select" [id]="'status-' + ticket.id" [value]="ticket.status"
+                        [disabled]="updatingTicketId() === ticket.id"
+                        (change)="updateStatus(ticket, $event)">
+                        <option [value]="ticket.status" disabled>{{ statusLabel(ticket.status) }}</option>
+                        @for (nextStatus of nextStatuses[ticket.status]; track nextStatus) {
+                          <option [value]="nextStatus">העבר ל{{ statusLabel(nextStatus) }}</option>
+                        }
+                      </select>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <footer class="pagination-bar">
+          <span class="pagination-summary">מציג {{ firstResult() }}–{{ lastResult() }} מתוך {{ totalCount() }} פניות</span>
+          <div class="pagination-controls">
+            <span>עמוד {{ page() }} מתוך {{ totalPages() }}</span>
+            <button class="icon-button" type="button" (click)="changePage(1)" [disabled]="!canGoForward()" aria-label="העמוד הבא" title="העמוד הבא">
+              <svg lucideChevronRight [size]="17"></svg>
+            </button>
+            <button class="icon-button" type="button" (click)="changePage(-1)" [disabled]="!canGoBack()" aria-label="העמוד הקודם" title="העמוד הקודם">
+              <svg lucideChevronLeft [size]="17"></svg>
+            </button>
+          </div>
+        </footer>
+      }
+    </section>
+  </main>
+
+  @if (selectedTicket(); as ticket) {
+    <button class="drawer-backdrop" type="button" (click)="closeHistory()" aria-label="סגירת היסטוריה"></button>
+    <aside class="history-drawer" role="dialog" aria-modal="true" [attr.aria-label]="'היסטוריית שינויים: ' + ticket.title">
+      <header class="drawer-header">
+        <div><p class="eyebrow">תיעוד שינויים</p><h2>היסטוריית פנייה</h2><p class="drawer-ticket-title">{{ ticket.title }}</p><span class="drawer-organization">{{ ticket.organizationName }}</span></div>
+        <button class="icon-button" type="button" (click)="closeHistory()" aria-label="סגירה" title="סגירה"><svg lucideX [size]="18"></svg></button>
+      </header>
+      <div class="drawer-content">
+        @if (historyLoading()) {
+          <div class="drawer-state"><span class="spinner"></span><span>טוען היסטוריה...</span></div>
+        } @else if (historyError()) {
+          <div class="drawer-state drawer-error"><svg lucideCircleAlert [size]="20"></svg><p>{{ historyError() }}</p></div>
+        } @else if (historyEntries().length === 0) {
+          <div class="drawer-state"><svg lucideClock3 [size]="22"></svg><p>אין עדיין שינויי סטטוס לפנייה זו.</p></div>
+        } @else {
+          <ol class="history-list">
+            @for (entry of historyEntries(); track entry.changedAt + entry.newStatus) {
+              <li class="history-entry">
+                <span class="timeline-mark"></span>
+                <div class="history-entry-heading"><strong>{{ statusLabel(entry.newStatus) }}</strong><time>{{ entry.changedAt | date:'dd/MM/yyyy · HH:mm' }}</time></div>
+                <p>מעבר מ־{{ statusLabel(entry.oldStatus) }} ל־{{ statusLabel(entry.newStatus) }}</p>
+                <span class="changed-by">{{ entry.changedBy || 'עודכן דרך המערכת' }}</span>
+              </li>
+            }
+          </ol>
+        }
+      </div>
+    </aside>
+  }
+</div>

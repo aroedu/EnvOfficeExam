@@ -11,6 +11,12 @@
 3. הרצת המיגרציה ליצירת הטבלאות: `dotnet ef database update` בתוך `src/TicketManagement.Api`.
 4. הרצת השרת: `dotnet run --project src/TicketManagement.Api`.
 
+## הרצת Angular
+
+1. הפעילו את ה-API לפי השלבים למעלה.
+2. הריצו `npm start --prefix src/TicketManagement.Web`.
+3. פתחו `http://localhost:4200`. Proxy של Angular מעביר את `/api` ל-`http://localhost:5123`.
+
 ## מבנה
 
 - `Models` – ישות `Ticket` (Id, Title, OrganizationName, Status, Priority, AssignedTo, CreatedAt,
@@ -47,8 +53,11 @@
 **סעיף 4 – Audit + פעולת Bulk**
 - כל שינוי סטטוס נכתב ל-`TicketAuditLog` (OldStatus, NewStatus, ChangedAt) בתוך אותה טרנזקציה.
 - `GET /api/tickets/{id}/history` מציג את היסטוריית השינויים.
-- `POST /api/tickets/bulk-status` מעדכן מספר פניות במקביל; פריט שנכשל (לא קיים / מעבר לא חוקי /
-  קונפליקט concurrency) לא מפיל את שאר הבקשה – מוחזרת תוצאה פר-פריט (`BulkStatusUpdateItemResult`).
+- `POST /api/tickets/bulk-status` מקבל עד 100 פניות בבקשה. בקשה גדולה יותר נדחית כולה עם HTTP 400
+  לפני עיבוד הפריטים. עדכוני ה-bulk מתבצעים בזה אחר זה; פנייה שאינה קיימת, מעבר סטטוס לא חוקי או
+  קונפליקט concurrency (גרסת `Version` מיושנת) מסומנים ככישלון של אותו פריט, ושאר הפריטים ממשיכים.
+  מוחזרת תוצאה לכל פריט (`BulkStatusUpdateItemResult`) עם `Success` ו-`Error`; כשלים ברמת פריט
+  אינם משנים את HTTP 200 של תגובת ה-bulk.
 
 ## הערה
 

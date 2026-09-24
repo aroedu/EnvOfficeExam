@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using TicketManagement.Api.Models;
 
 namespace TicketManagement.Api.Dtos;
@@ -17,6 +18,7 @@ public class TicketQueryParameters
     private const int MaxPageSize = 100;
     private int _pageSize = 20;
 
+    [Range(1, int.MaxValue)]
     public int Page { get; set; } = 1;
 
     public int PageSize
