@@ -24,6 +24,7 @@
 - בדיקות אינטגרציה: `dotnet test tests/TicketManagement.Api.IntegrationTests/TicketManagement.Api.IntegrationTests.csproj --configuration Release`.
 - [תיעוד הפתרון – סעיף 11](Doc/Section-11-Solution.md).
 - [מבנה מסד הנתונים](Doc/Database-Schema.md).
+- [תוכנית לימודים לראיון עבודה](Doc/Interview-Study-Plan.md).
 - [בדיקות אוטומטיות – סעיף 8](Doc/Section-8-Tests.md).
 - [בדיקות ביצועים – סעיף 6](Doc/Section-6-Performance.md).
 
