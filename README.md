@@ -1,21 +1,30 @@
 # Ticket Management API
 
 מימוש API עבור ניהול פניות (Tickets), על בסיס .NET 10 Web API + EF Core + PostgreSQL (Supabase),
-המכסה את סעיפים 1–4 במסמך המבחן.
+המלווה בממשק Angular. הוראות התקנה, ארכיטקטורה, בדיקות והחלטות תכנון מופיעות ב־[תיעוד הפתרון](Doc/Section-11-Solution.md).
 
 ## הרצה מול Supabase
 
-1. ב-Supabase: Project Settings → Database → Connection string (Session / Transaction pooler).
-2. עדכנו את `ConnectionStrings:Supabase` ב-[appsettings.json](src/TicketManagement.Api/appsettings.json)
-   (או עדיף: `dotnet user-secrets set "ConnectionStrings:Supabase" "..."`).
-3. הרצת המיגרציה ליצירת הטבלאות: `dotnet ef database update` בתוך `src/TicketManagement.Api`.
-4. הרצת השרת: `dotnet run --project src/TicketManagement.Api`.
+1. ב־Supabase: Project Settings → Database → Connection string.
+2. הגדירו סוד מקומי באמצעות `dotnet user-secrets set "ConnectionStrings:Supabase" "<connection-string>" --project src/TicketManagement.Api`.
+  ב־hosting הגדירו משתנה סביבה בשם `ConnectionStrings__Supabase`. אל תשמרו credentials בקובץ הגדרות או ב־Git.
+3. התקינו אם צריך את כלי המיגרציות: `dotnet tool install --global dotnet-ef --version 10.0.12`.
+4. החילו מיגרציות: `dotnet ef database update --project src/TicketManagement.Api`.
+5. הריצו את השרת: `dotnet run --project src/TicketManagement.Api`.
 
 ## הרצת Angular
 
-1. הפעילו את ה-API לפי השלבים למעלה.
-2. הריצו `npm start --prefix src/TicketManagement.Web`.
-3. פתחו `http://localhost:4200`. Proxy של Angular מעביר את `/api` ל-`http://localhost:5123`.
+1. התקינו חבילות: `npm install --prefix src/TicketManagement.Web`.
+2. הפעילו את ה־API לפי השלבים למעלה.
+3. הריצו `npm start --prefix src/TicketManagement.Web`.
+4. פתחו `http://localhost:4200`. Proxy של Angular מעביר את `/api` ל־`http://localhost:5123`.
+
+## בדיקות ותיעוד
+
+- בדיקות אינטגרציה: `dotnet test tests/TicketManagement.Api.IntegrationTests/TicketManagement.Api.IntegrationTests.csproj --configuration Release`.
+- [תיעוד הפתרון – סעיף 11](Doc/Section-11-Solution.md).
+- [בדיקות אוטומטיות – סעיף 8](Doc/Section-8-Tests.md).
+- [בדיקות ביצועים – סעיף 6](Doc/Section-6-Performance.md).
 
 ## מבנה
 
