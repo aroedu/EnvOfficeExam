@@ -13,6 +13,7 @@ builder.Services.AddControllers()
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddMemoryCache();
 
 // Supabase is Postgres, so it's accessed through the standard Npgsql/EF Core provider
 // using the connection string from the Supabase project settings (Database -> Connection string).

@@ -1,17 +1,18 @@
--- Run only against a dedicated, empty benchmark database after applying EF migrations.
+-- Run only against a dedicated, empty benchmark database/schema after applying EF migrations.
+-- Set the connection search_path to that database/schema; the default public schema also works.
 -- This script refuses to run if either application table already contains data.
 BEGIN;
 
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM public.tickets)
-       OR EXISTS (SELECT 1 FROM public.ticket_audit_logs) THEN
+     IF EXISTS (SELECT 1 FROM tickets)
+         OR EXISTS (SELECT 1 FROM ticket_audit_logs) THEN
         RAISE EXCEPTION 'Benchmark database must have empty tickets and ticket_audit_logs tables';
     END IF;
 END
 $$;
 
-INSERT INTO public.tickets
+INSERT INTO tickets
     ("Id", "Title", "OrganizationName", "Status", "Priority",
      "AssignedTo", "CreatedAt", "UpdatedAt", "Version")
 SELECT
@@ -26,7 +27,7 @@ SELECT
     1
 FROM generate_series(1, 100000) AS source(i);
 
-INSERT INTO public.ticket_audit_logs
+INSERT INTO ticket_audit_logs
     ("TicketId", "OldStatus", "NewStatus", "ChangedBy", "ChangedAt")
 SELECT
     "Id",
@@ -34,20 +35,20 @@ SELECT
     "Status",
     'section-6-benchmark',
     "UpdatedAt"
-FROM public.tickets;
+ FROM tickets;
 
-ANALYZE public.tickets;
-ANALYZE public.ticket_audit_logs;
+ANALYZE tickets;
+ANALYZE ticket_audit_logs;
 
 COMMIT;
 
-SELECT count(*) AS ticket_count FROM public.tickets;
-SELECT count(*) AS audit_log_count FROM public.ticket_audit_logs;
+SELECT count(*) AS ticket_count FROM tickets;
+SELECT count(*) AS audit_log_count FROM ticket_audit_logs;
 
 -- GET /api/tickets: count query for status + priority filters.
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT count(*)
-FROM public.tickets
+FROM tickets
 WHERE "Status" = 'InProgress'
   AND "Priority" = 'High';
 
@@ -55,7 +56,7 @@ WHERE "Status" = 'InProgress'
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT "Id", "Title", "OrganizationName", "Status", "Priority",
        "AssignedTo", "CreatedAt", "UpdatedAt", "Version"
-FROM public.tickets
+FROM tickets
 WHERE "Status" = 'InProgress'
   AND "Priority" = 'High'
 ORDER BY "CreatedAt" DESC, "Id" ASC
@@ -64,12 +65,12 @@ LIMIT 20 OFFSET 0;
 -- GET /api/tickets/{id}/history: existence check followed by history retrieval.
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT 1
-FROM public.tickets
+FROM tickets
 WHERE "Id" = 'c4ca4238-a0b9-2382-0dcc-509a6f75849b'
 LIMIT 1;
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT "OldStatus", "NewStatus", "ChangedBy", "ChangedAt"
-FROM public.ticket_audit_logs
+FROM ticket_audit_logs
 WHERE "TicketId" = 'c4ca4238-a0b9-2382-0dcc-509a6f75849b'
 ORDER BY "ChangedAt" DESC;

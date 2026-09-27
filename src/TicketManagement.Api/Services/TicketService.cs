@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using TicketManagement.Api.Data;
 using TicketManagement.Api.Dtos;
 using TicketManagement.Api.Exceptions;
@@ -6,10 +7,19 @@ using TicketManagement.Api.Models;
 
 namespace TicketManagement.Api.Services;
 
-public class TicketService(AppDbContext db) : ITicketService
+public class TicketService(AppDbContext db, IMemoryCache cache) : ITicketService
 {
+    private const string StatisticsCacheKey = "ticket-statistics:v1";
+    private static readonly TimeSpan StatisticsCacheExpiration = TimeSpan.FromMinutes(1);
+
     public async Task<TicketStatisticsDto> GetStatisticsAsync(CancellationToken cancellationToken)
     {
+        if (cache.TryGetValue(StatisticsCacheKey, out TicketStatisticsDto? cachedStatistics)
+            && cachedStatistics is not null)
+        {
+            return cachedStatistics;
+        }
+
         var statusCounts = await db.Tickets.AsNoTracking()
             .GroupBy(ticket => ticket.Status)
             .Select(group => new TicketStatusCountDto(group.Key, group.Count()))
@@ -23,13 +33,16 @@ public class TicketService(AppDbContext db) : ITicketService
         var countsByStatus = statusCounts.ToDictionary(item => item.Status, item => item.Count);
         var countsByPriority = priorityCounts.ToDictionary(item => item.Priority, item => item.Count);
 
-        return new TicketStatisticsDto(
+        var statistics = new TicketStatisticsDto(
             Enum.GetValues<TicketStatus>()
                 .Select(status => new TicketStatusCountDto(status, countsByStatus.GetValueOrDefault(status)))
                 .ToArray(),
             Enum.GetValues<TicketPriority>()
                 .Select(priority => new TicketPriorityCountDto(priority, countsByPriority.GetValueOrDefault(priority)))
                 .ToArray());
+
+        cache.Set(StatisticsCacheKey, statistics, StatisticsCacheExpiration);
+        return statistics;
     }
 
     // Section 1: paging, combined filtering, text search, sorting by at least three fields.
@@ -119,6 +132,7 @@ public class TicketService(AppDbContext db) : ITicketService
 
         db.Tickets.Add(ticket);
         await db.SaveChangesAsync(cancellationToken);
+        InvalidateStatisticsCache();
 
         return TicketDto.FromEntity(ticket);
     }
@@ -159,8 +173,11 @@ public class TicketService(AppDbContext db) : ITicketService
             throw new ConcurrencyConflictException(id);
         }
 
+        InvalidateStatisticsCache();
         return TicketDto.FromEntity(ticket);
     }
+
+    private void InvalidateStatisticsCache() => cache.Remove(StatisticsCacheKey);
 
     // Section 4: batch operation where individual items may not exist or may fail without aborting the rest.
     public async Task<IReadOnlyList<BulkStatusUpdateItemResult>> BulkUpdateStatusAsync(
