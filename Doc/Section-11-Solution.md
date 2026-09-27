@@ -93,6 +93,8 @@ npm run build --prefix src/TicketManagement.Web
 
 נבחר PostgreSQL ב־Supabase, וניגשים אליו דרך Npgsql ו־EF Core. המודל יחסי: פניות ויומן audit, מפתחות זרים וטרנזקציות. EF Core מספק מיגרציות, ושאילתות הרשימה נשארות ב־DB עד לאחר סינון, מיון ודפדוף. אין שימוש ב־Supabase SDK ייעודי, משום שהפעולות הנדרשות הן SQL יחסיות רגילות.
 
+תרשים קשרים ורשימת עמודות מלאה מופיעים ב־[תיעוד מבנה מסד הנתונים](Database-Schema.md).
+
 האינדקסים מוגדרים ב־`AppDbContext` ונוצרים במיגרציה:
 
 - `tickets` – מפתח ראשי על `Id`; אינדקסים על `Status`,‏ `Priority`,‏ `AssignedTo` ו־`CreatedAt`.
