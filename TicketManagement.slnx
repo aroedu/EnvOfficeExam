@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/TicketManagement.Api/TicketManagement.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TicketManagement.Api.IntegrationTests/TicketManagement.Api.IntegrationTests.csproj" />
+  </Folder>
 </Solution>
