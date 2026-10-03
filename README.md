@@ -1,197 +1,213 @@
-# Interview Guide – Ticket Management (Full Stack, Level C)
+# Ticket Management
 
-Prepared from `Doc/specs.docx` and the actual code in this repo. Each claim below is tied to a file you can open during the interview.
+A ticket (request) management system for many concurrent users and a large data set: a **.NET 10 Web API** on **PostgreSQL (Supabase)** and an **Angular 20** client.
 
-## 1. 60-second pitch
+Users can search, filter, sort and page tickets on the server, update ticket status safely under concurrent edits, view the change history and see summary statistics.
 
-> A ticket-management system for many concurrent users and a large data set. **.NET 10 Web API** (controllers → service → EF Core) on **PostgreSQL/Supabase**, and an **Angular 20** client. All filtering, search, sorting and paging run in the database. Status updates use **optimistic concurrency** (a `Version` column checked in the SQL `UPDATE`). Every status change writes an **audit row in the same transaction**. Statistics are **cached** with explicit invalidation. Four integration tests run against the real HTTP pipeline. I measured two endpoints on 100,000 rows with `EXPLAIN (ANALYZE, BUFFERS)`.
+## Features
 
-## 2. Architecture
+- **Retrieval:** server-side paging (max 100 per page), combined filters, text search, sorting, aggregations. Nothing is filtered or paged on the client.
+- **Status updates:** an explicit state machine, 404 for unknown tickets, and **optimistic concurrency** that returns 409 on conflict.
+- **Audit:** every status change is recorded in the same transaction, with a history endpoint.
+- **Bulk update:** up to 100 tickets per request, **partial success** with a per-item result.
+- **Cache:** statistics are cached in memory with a TTL and explicit invalidation.
+- **Errors:** consistent RFC 7807 `ProblemDetails` responses from one global middleware.
 
-```mermaid
-flowchart LR
-  UI[Angular 20<br/>TicketWorkspaceComponent] -->|/api via proxy| C[TicketsController]
-  C --> S[TicketService]
-  S --> DB[(PostgreSQL / Supabase<br/>tickets, ticket_audit_logs)]
-  S --> M[IMemoryCache<br/>ticket-statistics:v1]
-  MW[GlobalExceptionMiddleware<br/>ProblemDetails] -.wraps.-> C
-```
+## Tech stack
 
-| Area | Path |
+| Part | Technology |
 |---|---|
-| Endpoints | `src/TicketManagement.Api/Controllers/TicketsController.cs` |
-| Logic (queries, transitions, concurrency, audit, bulk, cache) | `Services/TicketService.cs`, `Services/TicketStatusTransitions.cs` |
-| Model, indexes, concurrency token | `Data/AppDbContext.cs`, `Data/Migrations` |
-| Error mapping | `Middleware/GlobalExceptionMiddleware.cs`, `Exceptions/*` |
-| DTOs / query params | `Dtos/*` |
-| Angular UI | `src/TicketManagement.Web/src/app` (component, `ticket-api.service.ts`, `ticket.models.ts`) |
-| Tests | `tests/TicketManagement.Api.IntegrationTests` |
-| Docs | `Doc/Section-6-Performance.md`, `Section-7-Cache.md`, `Section-8-Tests.md`, `Section-11-Solution.md`, `Database-Schema.md` |
+| Backend | ASP.NET Core Web API, .NET 10 (`net10.0`), controllers |
+| Data access | Entity Framework Core 10.0.12, Npgsql provider 10.0.3 |
+| Database | PostgreSQL hosted on Supabase |
+| Frontend | Angular 20.3, Signals, Reactive Forms, RxJS 7.8 |
+| Tests | xUnit, `WebApplicationFactory`, SQLite in-memory |
 
-## 3. Spec → implementation map
+## Repository layout
 
-| Spec section | What exists | Say this |
-|---|---|---|
-| **1. Retrieval** | `GET /api/tickets`: server-side paging (max 100), filter by status, priority, assignedTo, `ILIKE` search on Title and OrganizationName, 5 sort fields with `Id` tie-break, `AsNoTracking`, DTOs, `CancellationToken`. Aggregations: `GET /api/tickets/statistics` (by status, by priority). | "The query stays `IQueryable`. EF translates it to SQL, so only one page is materialized. A separate `COUNT` provides `totalCount`." |
-| **2. Status and concurrency** | 404 for missing ticket, state machine in `TicketStatusTransitions`, `Version` as EF concurrency token, `UpdatedAt` and `Version` set server-side. | "The client sends the version it saw. EF adds `WHERE Version = @orig` to the `UPDATE`. Zero rows affected → `DbUpdateConcurrencyException` → 409. Two competing writers cannot both win, so there is no lost update." |
-| **3. Audit** | `ticket_audit_logs` (OldStatus, NewStatus, ChangedBy, ChangedAt), written in the same `SaveChanges` as the status change. `GET /api/tickets/{id}/history`. | "One `SaveChanges` is one DB transaction, so the status and its audit row are atomic." |
-| **4. Bulk** | `POST /api/tickets/bulk-status`, max 100 (400 above that), **partial success**, per-item result. | See 4.4 for the justification. |
-| **5. Angular** | Server-side search/filter/sort/paging, 350 ms debounce, `switchMap`/`takeUntil` cancellation, loading/empty/error states, status update with 409 handling, statistics, history panel. | See 4.7. |
-| **6. Performance** | Two endpoints measured on 100k rows, indexes listed, bottleneck identified. | See 4.5. |
-| **7. Cache** | `IMemoryCache`, key `ticket-statistics:v1`, 1 minute absolute TTL, removed on create/update. Multi-instance plan: Redis. | See 4.6. |
-| **8. Tests** | 4 integration tests with `WebApplicationFactory` and in-memory SQLite. | See 4.8. |
-| **9. Work plan** | Not found in the repo. | **Must prepare before the interview.** See section 8. |
-| **10. Code quality** | Layering, DI, DTOs, async, global ProblemDetails handling. | Also admit that logging is minimal. |
-| **11. Docs** | `Doc/Section-11-Solution.md` (setup, versions, decisions, AI usage). | Open it during the demo. |
-
-## 4. Deep dives
-
-### 4.1 Pagination, search and indexes
-- Filters build up on one `IQueryable<Ticket>`. `Count`, `OrderBy`, `Skip`, `Take` and `Select` all run in PostgreSQL.
-- `ThenBy(Id)` gives a deterministic order, so rows don't repeat or vanish between pages.
-- Indexes (`AppDbContext`): `Status`, `Priority`, `AssignedTo`, `CreatedAt`, composite `(Status, Priority, CreatedAt)` for the common filter + date sort, and `ticket_audit_logs(TicketId, ChangedAt)` for history.
-- **Weak spot:** `ILIKE '%term%'` cannot use B-tree indexes. The fix is the `pg_trgm` extension with a GIN index, to be adopted only after `EXPLAIN` shows it is needed.
-- **Why offset paging:** simple, and it supports "jump to page N". Its cost grows with depth, so the alternative is keyset pagination.
-
-### 4.2 Optimistic concurrency
 ```
-Client A reads v=3     Client B reads v=3
-A: UPDATE ... WHERE Id=x AND Version=3  → 1 row, Version=4
-B: UPDATE ... WHERE Id=x AND Version=3  → 0 rows → 409
+src/
+  TicketManagement.Api/        Web API
+    Controllers/               HTTP endpoints
+    Services/                  Queries, transitions, concurrency, audit, bulk, cache
+    Data/                      AppDbContext, indexes, EF migrations
+    Models/ Dtos/              Entities and request/response contracts
+    Middleware/ Exceptions/    Global error handling
+  TicketManagement.Web/        Angular client (dev proxy: /api -> http://localhost:5123)
+tests/
+  TicketManagement.Api.IntegrationTests/
+Doc/                           Specs, performance, cache, tests, solution notes
 ```
-- Code: `db.Entry(ticket).Property(t => t.Version).OriginalValue = request.Version`, then `ticket.Version++`.
-- The check is enforced **in the database statement**, not in the UI, which is what the spec asks for.
-- Why optimistic: low contention, no long-held locks, and the UI can show a friendly conflict message.
-- Alternatives: pessimistic locks (hold DB resources), last-write-wins (silent lost updates), PostgreSQL `xmin` as a built-in row version.
-- The `Version` is an `int` incremented in app code. An `xmin` or `RowVersion` is the "more native" option. Be ready to say why you didn't use it: portability and simplicity, and it is testable on SQLite.
 
-### 4.3 Audit
-- Each successful status change adds a `TicketAuditLog` before the single `SaveChangesAsync`, so both rows commit or neither does.
-- History is returned newest first, after an existence check (404 if the ticket is missing).
+## Getting started
 
-### 4.4 Bulk update – partial success
-- **Decision:** partial success with a per-item result (`TicketId`, `Success`, `Error`).
-- **Why:** items are independent tickets. One missing ticket, one invalid transition or one stale version shouldn't block 99 valid updates. The client gets exactly what failed and why.
-- **When all-or-nothing is better:** operations that must be atomic as a business unit (for example, moving a whole case together). It also needs a stronger conflict policy.
-- Hard limit: more than 100 items returns 400 before any processing.
-- **Known risk (see section 6):** items are processed sequentially through the same `DbContext`.
+### Prerequisites
 
-### 4.5 Performance (from `Doc/Section-6-Performance.md`)
-- Data: 100,000 tickets and 100,000 audit rows (`Doc/section-6-performance.sql`, with an empty-table guard so it never deletes data).
-- Endpoints measured: `GET /api/tickets` (status + priority, page of 20) and `GET /api/tickets/{id}/history`.
+- .NET SDK 10
+- Node.js and npm (Angular CLI 20 is installed by `npm install`)
+- A PostgreSQL database, for example a Supabase project
+- `dotnet-ef` 10.0.12: `dotnet tool install --global dotnet-ef --version 10.0.12`
 
-| Step | SQL time | Plan |
+### 1. Configure the database connection
+
+Use an Npgsql connection string (host, port, database, user, password). Store it in user-secrets so it never reaches Git:
+
+```powershell
+dotnet user-secrets set "ConnectionStrings:Supabase" "<npgsql-connection-string>" --project src/TicketManagement.Api
+```
+
+When hosted, set the environment variable `ConnectionStrings__Supabase`. `appsettings.json` contains only a placeholder.
+
+> EF Core connects with the database user and password. A Supabase REST API key is not used.
+
+### 2. Create the schema
+
+```powershell
+dotnet ef database update --project src/TicketManagement.Api
+```
+
+### 3. Run the API
+
+```powershell
+dotnet run --project src/TicketManagement.Api
+```
+
+The API listens on `http://localhost:5123`. In Development the OpenAPI document is served at `/openapi/v1.json`.
+
+### 4. Run the Angular client
+
+```powershell
+npm install --prefix src/TicketManagement.Web
+npm start --prefix src/TicketManagement.Web
+```
+
+Open `http://localhost:4200`. The Angular dev proxy forwards `/api` to the API, so no CORS setup is needed in development.
+
+### Test data
+
+[Doc/section-6-performance.sql](Doc/section-6-performance.sql) inserts 100,000 tickets and 100,000 audit rows. It stops if the tables are not empty, so it never deletes existing data. Run it against a test database or schema.
+
+### Tests
+
+```powershell
+dotnet test tests/TicketManagement.Api.IntegrationTests/TicketManagement.Api.IntegrationTests.csproj --configuration Release
+```
+
+Build the client:
+
+```powershell
+npm run build --prefix src/TicketManagement.Web
+```
+
+## API
+
+Base path: `/api/tickets`
+
+| Method | Route | Description |
 |---|---|---|
-| List – count (8,333 matches) | 2.954 ms | Index Only Scan, 77 buffer hits |
-| List – page of 20 | 0.102 ms | Index Scan + Incremental Sort |
-| History – existence check | 0.048 ms | Index Only Scan |
-| History – audit fetch | 0.036 ms | Index Scan |
+| `GET` | `/` | List tickets with paging, filters, search and sorting |
+| `GET` | `/statistics` | Counts by status and by priority (cached) |
+| `GET` | `/{id}` | Get one ticket |
+| `POST` | `/` | Create a ticket (status starts as `New`) |
+| `PATCH` | `/{id}/status` | Change status; body `{ "newStatus": "...", "version": n }` |
+| `POST` | `/bulk-status` | Update up to 100 tickets; returns a result per item |
+| `GET` | `/{id}/history` | Status-change history, newest first |
 
-- HTTP median was about 467 ms for both endpoints, with p95 under 476 ms. That is dominated by round-trips from a local machine to Supabase and by the two sequential queries on the list endpoint. Say this clearly, so you aren't blamed for a "slow" API when SQL took under 3 ms.
-- Bottlenecks to name: substring search, `COUNT` over every match on every request, deep `OFFSET`, and statistics scans as the table grows.
+**List query parameters:** `page`, `pageSize` (1–100, default 20), `status`, `priority`, `assignedTo`, `search` (Title and OrganizationName), `sortBy` (`CreatedAt`, `UpdatedAt`, `Priority`, `Title`, `Status`), `sortDescending`.
 
-### 4.6 Cache
-- **What:** statistics (two `GROUP BY` queries). They are read often by the dashboard and change only on create or status change.
-- **Expiration:** 1 minute absolute. This is the safety net if data changes outside the API.
-- **Invalidation:** `cache.Remove(key)` after a successful create or update (bulk goes through the same method). A failed update doesn't invalidate.
-- **Multiple instances:** `IMemoryCache` is per process, so instance A invalidating does nothing for instance B. Use `IDistributedCache` with Redis under the same key, deleting the shared key after writes. If you add a local L1 cache on top, broadcast invalidation (Redis Pub/Sub).
-- Why not cache tickets themselves: they change often and are cheap to fetch by primary key.
+**Ticket fields:** `Id`, `Title`, `OrganizationName`, `Status` (`New`, `InProgress`, `Waiting`, `Completed`), `Priority` (`Low`, `Medium`, `High`), `AssignedTo`, `CreatedAt`, `UpdatedAt`, `Version`.
 
-### 4.7 Angular
-- `TicketWorkspaceComponent` uses signals for state and RxJS for the async flows.
-- **Search:** `valueChanges → distinctUntilChanged → (cancel in-flight request) → debounceTime(350) → refresh`. The list stream uses `switchMap`, and `takeUntil(cancelListRequest$)` cancels a request when the user types again.
-- **States:** `loading`, `listError`, empty (no results) and data.
-- **Status update:** only transitions allowed by `nextStatuses` are offered. A 409 shows a message and refreshes the list. The `version` is sent with each update.
-- **Cleanup:** `takeUntilDestroyed` on all long-lived subscriptions.
-- `ticket-api.service.ts` is the only place that does HTTP. `proxy.conf.json` forwards `/api` to `http://localhost:5123`, so no CORS setup is needed in development.
-- **Weak spots:** one large component (the spec asks to separate responsibilities between components and services). There is no bulk UI. The 409 message doesn't distinguish "stale version" from "invalid transition". Hebrew labels are hard-coded rather than i18n.
+**Status transitions:** `New → InProgress`, `InProgress → Waiting | Completed`, `Waiting → InProgress | Completed`. `Completed` is final.
 
-### 4.8 Tests
-1. `GetTickets_FiltersBeforePaging` – happy path.
-2. `GetTickets_ReturnsBadRequestForInvalidPage` – validation (400).
-3. `UpdateStatus_WritesAuditAndInvalidatesStatisticsCache` – update + audit + cache.
-4. `UpdateStatus_ReturnsConflictForStaleVersion` – concurrency (409).
+**Error responses** are `application/problem+json`:
 
-All go through the real HTTP pipeline with in-memory SQLite and a fresh database per test. SQLite can't prove PostgreSQL-specific behavior (`ILIKE`, query plans). The fix is Testcontainers with PostgreSQL. A true concurrent race test (two parallel requests) is a good addition.
+| Case | Status |
+|---|---|
+| Ticket not found | 404 |
+| Transition not allowed | 409 |
+| Stale `version` (concurrent update) | 409 |
+| Invalid parameters, or bulk request over 100 items | 400 |
+| Unexpected error | 500 (generic message, details only in logs) |
 
-## 5. Two technology decisions with alternatives
+## Design
 
-| Decision | Chosen | Alternatives considered | Why |
-|---|---|---|---|
-| Database access | PostgreSQL (Supabase) via EF Core + Npgsql | Supabase REST/SDK with API key; MongoDB | Relational model (ticket ↔ audit), real transactions, SQL aggregations and indexes. The Supabase SDK adds nothing for plain SQL. |
-| Concurrency | Optimistic with `Version` | Last-write-wins; pessimistic locks | Low contention, no held locks, an enforceable DB-level check. |
+### Data access and paging
 
-## 6. Known limitations – know these before they ask
+Filters, sorting, `Skip`/`Take` and `COUNT` are composed on an `IQueryable` and translated to SQL, so only one page is loaded into memory. Reads use `AsNoTracking`, results are DTOs, and every I/O call takes a `CancellationToken`. Sorting adds `Id` as a tie-break so paging is stable.
 
-Ranked by how likely an interviewer is to find them:
+Indexes (in `AppDbContext`): `Status`, `Priority`, `AssignedTo`, `CreatedAt`, composite `(Status, Priority, CreatedAt)`, and `ticket_audit_logs(TicketId, ChangedAt)`. See [Doc/Database-Schema.md](Doc/Database-Schema.md).
 
-1. **Spec gaps in filtering:** the spec lists OrganizationName and a date range as filters; the API has neither. Easy to add.
-2. **Audit fields:** the spec asks for `RequestId` and `PreviousStatus`. The code has `OldStatus` (same meaning) but no `RequestId`, and `ChangedBy` is always null because there is no authentication or user context.
-3. **Bulk and the change tracker:** after one item hits a concurrency conflict, its modified entity stays tracked in the shared `DbContext`. The next item's `SaveChanges` may re-attempt it and fail wrongly. Fix: `db.ChangeTracker.Clear()` in the catch, or a fresh scope or context per item. Also add a regression test. This is the first thing to verify by running a bulk request with a stale version followed by a valid item.
-4. **Invalid transition → 409:** defensible, but many reviewers expect 400 or 422 for a validation error and keep 409 for concurrency.
-5. **Page size is clamped silently** rather than rejected. The spec says "validation".
-6. **Input validation on create:** no explicit length or required rules on `CreateTicketRequest`; only DB column limits.
-7. **Logging:** only the global exception middleware logs. No logs for key operations.
-8. **Bulk performance:** N sequential round-trips (about 3 queries per item). Batch with `WHERE Id IN (...)` in one query if volume grows.
-9. **No work-plan document** (spec section 9) in the repo.
+### Concurrency
 
-"One limitation + one improvement" is required in the docs. Strong choices: the substring-search index (`pg_trgm`) and the Redis cache for multi-instance.
+`Ticket.Version` is an EF concurrency token. The client sends the version it last read; EF adds it to the `UPDATE ... WHERE Id = @id AND Version = @version` statement. If another writer got there first, no row matches and the API returns 409. The server increments `Version` and sets `UpdatedAt`; clients cannot set them. The check happens in the database, not only in the UI.
 
-## 7. Likely questions and model answers
+### Audit
 
-**Why is the first load of a page not O(N)?** Because `Where/OrderBy/Skip/Take` stay in `IQueryable` and become SQL. Only 20 rows are materialized, and the plan uses indexes.
+The ticket change and its audit row are saved in one `SaveChangesAsync`, so they commit together or not at all.
 
-**What happens if two users change the same ticket?** The first `UPDATE ... WHERE Version = x` wins and increments the version. The second affects 0 rows, gets a 409, and the UI refreshes and tells the user.
+### Bulk update
 
-**Why not handle concurrency only in the UI?** The UI can't see other users' writes. Only the database can atomically enforce it.
+Partial success: each ticket is processed independently, and the response lists success or the reason for failure per item. A missing ticket, an invalid transition or a version conflict does not block the others. A request with more than 100 items is rejected with 400.
 
-**Is the cache correct after an update?** Yes on a single instance: `Remove` on success, and a 1-minute TTL as a bound. With several instances it is only eventually consistent (up to 1 minute) until moved to Redis.
+### Cache
 
-**Why partial success for bulk?** Items are independent and the client needs per-item results. All-or-nothing would turn one bad item into a total failure.
+`GET /api/tickets/statistics` is cached in `IMemoryCache` under `ticket-statistics:v1` with a 1-minute absolute expiration. The key is removed after every successful create or status update (bulk included). The TTL bounds staleness if data changes outside the API. `IMemoryCache` is per process; for several instances use `IDistributedCache` with Redis. Details: [Doc/Section-7-Cache.md](Doc/Section-7-Cache.md).
 
-**How would you prove the index helps?** Run `EXPLAIN (ANALYZE, BUFFERS)` before and after, and compare plan node, time and buffers. That is what Section 6 does.
+### Frontend
 
-**What would you do for 10× traffic?** Read replicas, keyset pagination, cached or materialized counts, Redis cache, `pg_trgm` for search, and rate limits on bulk.
+A signal-based workspace component with a single `TicketApiService` for HTTP. Search is debounced (350 ms) and in-flight list requests are cancelled when the query changes (`switchMap`). The UI has loading, empty and error states, status updates with 409 handling, statistics and a history panel.
 
-**How do you avoid N+1 or tracking overhead?** `AsNoTracking` on reads, projection to DTOs, and one query per page plus one count.
+## Performance
 
-**Why DTOs and not entities?** The API contract is decoupled from the schema, and the server controls `Version` and `UpdatedAt`.
+Measured on 100,000 tickets and 100,000 audit rows with `EXPLAIN (ANALYZE, BUFFERS)`:
 
-**Which parts used AI?** Docs for sections 6–8 and 11, the cache, the integration tests, and scaffolding. Core logic (sections 1–4) was reviewed and tested by hand. Be specific about what you changed or rejected. Section 11 of the docs includes this statement.
+| Query | SQL time |
+|---|---|
+| List: count (8,333 matches) | 2.954 ms |
+| List: page of 20 | 0.102 ms |
+| History: existence check | 0.048 ms |
+| History: audit rows | 0.036 ms |
 
-**Security note you should raise yourself:** the DB password is kept in user-secrets or environment variables (`ConnectionStrings__Supabase`), never in `appsettings.json` or Git. Rotate any credential that was ever pasted into chat or logs.
+HTTP medians were about 467 ms, dominated by the network round-trip from a local machine to Supabase. Full method, plans and bottlenecks: [Doc/Section-6-Performance.md](Doc/Section-6-Performance.md).
 
-## 8. Work plan (section 9) – prepare this
+## Testing
 
-Suggested breakdown mapped to the spec, to present on a single page:
+Four integration tests run the real HTTP pipeline (controllers, middleware, service, EF Core) against in-memory SQLite, with a fresh database per test:
 
-| # | Task | Spec | Depends on | Estimate |
-|---|---|---|---|---|
-| 1 | Data model, enums, DB choice, migration | 1–3 | – | 0.5 d |
-| 2 | Indexes + 100k seed script (repeatable) | 1, 6 | 1 | 0.5 d |
-| 3 | List endpoint: paging, filters, search, sort, aggregations | 1 | 1 | 1 d |
-| 4 | Status update: transitions, 404/409, concurrency | 2 | 1 | 1 d |
-| 5 | Audit + history endpoint | 3 | 4 | 0.5 d |
-| 6 | Bulk endpoint, behavior documented | 4 | 4, 5 | 0.5 d |
-| 7 | Global error handling (ProblemDetails), logging | 10 | 3–6 | 0.5 d |
-| 8 | Cache + invalidation + multi-instance note | 7 | 3, 4 | 0.5 d |
-| 9 | Angular: service, list, states, debounce/switchMap | 5 | 3 | 1.5 d |
-| 10 | Angular: status update, 409, history, statistics | 5 | 4, 5, 9 | 1 d |
-| 11 | Integration tests (4+) | 8 | 3–5 | 1 d |
-| 12 | Performance measurement and report | 6 | 2, 3 | 0.5 d |
-| 13 | Documentation, run instructions, AI usage | 11 | all | 0.5 d |
+1. Filtering is applied before paging.
+2. An invalid page returns 400.
+3. A status update writes an audit row and invalidates the statistics cache.
+4. A stale version returns 409.
 
-Critical path: 1 → 4 → 5 → 10. Parallel streams after step 1: backend queries (3), UI skeleton (9), DB scripts (2).
+SQLite cannot verify PostgreSQL-specific behavior such as `ILIKE` or query plans. See [Doc/Section-8-Tests.md](Doc/Section-8-Tests.md).
 
-## 9. Demo script (about 5 minutes)
+## Key decisions
 
-1. `dotnet run --project src/TicketManagement.Api` and `npm start --prefix src/TicketManagement.Web`; open `http://localhost:4200`.
-2. Type fast in search → show the single request (debounce + cancel) and results updating.
-3. Filter by status + priority, change the sort field, and change page.
-4. Change one ticket's status → show the statistics update (cache invalidation) and open its history.
-5. Show the 409 case: open the same ticket in two tabs, update in one, then update in the other.
-6. Show an invalid transition (for example Completed → New) → a clear error.
-7. Open `Doc/Section-6-Performance.md` and one `EXPLAIN` result.
-8. Run `dotnet test tests/TicketManagement.Api.IntegrationTests` and show 4 passing tests.
+| Decision | Chosen | Alternatives |
+|---|---|---|
+| Database | PostgreSQL via EF Core and Npgsql | Supabase REST/SDK, MongoDB |
+| Concurrency | Optimistic with `Version` | Last-write-wins, pessimistic locks |
+| Bulk | Partial success | All-or-nothing transaction |
+| Cache | In-memory with TTL and invalidation | Redis (needed for multiple instances) |
 
+## Known limitations and next steps
 
+- Text search uses `ILIKE '%term%'`, which cannot use the B-tree indexes. Next step: `pg_trgm` with a GIN index, after confirming with `EXPLAIN`.
+- The in-memory cache is not shared between server instances. Next step: Redis.
+- Filtering by organization name and by date range is not implemented yet.
+- The audit log has no `RequestId`, and `ChangedBy` is empty because the API has no authentication yet.
+- Bulk items run sequentially in one `DbContext`; after a conflict the change tracker should be cleared before the next item.
+- Offset paging gets slower on deep pages; keyset paging is the alternative.
+
+## Documentation
+
+- [Doc/Section-11-Solution.md](Doc/Section-11-Solution.md): setup, versions, decisions, AI usage
+- [Doc/Database-Schema.md](Doc/Database-Schema.md)
+- [Doc/Section-6-Performance.md](Doc/Section-6-Performance.md)
+- [Doc/Section-7-Cache.md](Doc/Section-7-Cache.md)
+- [Doc/Section-8-Tests.md](Doc/Section-8-Tests.md)
+- [Doc/Interview-Guide.md](Doc/Interview-Guide.md) and [Doc/Interview-QA.md](Doc/Interview-QA.md)
+
+## Use of AI
+
+GitHub Copilot was used for scaffolding, the documentation sections, the cache and the integration test project. The core logic was reviewed and run manually, and the author is responsible for all submitted code.
