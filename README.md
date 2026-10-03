@@ -39,6 +39,33 @@ tests/
 Doc/                           Specs, performance, cache, tests, solution notes
 ```
 
+### Architecture
+
+```mermaid
+flowchart LR
+  UI[Angular 20<br/>TicketWorkspaceComponent] -->|/api via proxy| C[TicketsController]
+  C --> S[TicketService]
+  S --> DB[(PostgreSQL / Supabase<br/>tickets, ticket_audit_logs)]
+  S --> M[IMemoryCache<br/>ticket-statistics:v1]
+  MW[GlobalExceptionMiddleware<br/>ProblemDetails] -.wraps.-> C
+```
+
+## Requirements coverage
+
+| Spec section | Implementation | Where |
+|---|---|---|
+| 1. Retrieval | Server-side paging, filters, `ILIKE` search, 5 sort fields, statistics aggregations, DTOs, `CancellationToken` | `TicketService.GetTicketsAsync`, `GetStatisticsAsync` |
+| 2. Status and concurrency | Transition state machine, 404/409, `Version` concurrency token | `TicketStatusTransitions`, `TicketService.UpdateStatusAsync` |
+| 3. Audit | Audit row in the same transaction, history endpoint | `TicketAuditLog`, `GET /{id}/history` |
+| 4. Bulk | Up to 100 items, partial success, per-item result | `POST /bulk-status` |
+| 5. Angular | Server-side search/filter/sort/paging, debounce, request cancellation, UI states, 409 handling, statistics, history | `src/TicketManagement.Web` |
+| 6. Performance | Two endpoints measured on 100k rows | [Doc/Section-6-Performance.md](Doc/Section-6-Performance.md) |
+| 7. Cache | In-memory statistics cache, TTL and invalidation, Redis plan for scale-out | [Doc/Section-7-Cache.md](Doc/Section-7-Cache.md) |
+| 8. Tests | 4 integration tests | `tests/TicketManagement.Api.IntegrationTests` |
+| 9. Work plan | See [Work plan](#work-plan) | this file |
+| 10. Code quality | Layered structure, DI, DTOs, async, global `ProblemDetails` handling | `src/TicketManagement.Api` |
+| 11. Documentation | This README and `Doc/` | [Doc/Section-11-Solution.md](Doc/Section-11-Solution.md) |
+
 ## Getting started
 
 ### Prerequisites
@@ -198,6 +225,28 @@ SQLite cannot verify PostgreSQL-specific behavior such as `ILIKE` or query plans
 - The audit log has no `RequestId`, and `ChangedBy` is empty because the API has no authentication yet.
 - Bulk items run sequentially in one `DbContext`; after a conflict the change tracker should be cleared before the next item.
 - Offset paging gets slower on deep pages; keyset paging is the alternative.
+
+## Work plan
+
+How the spec was split into tasks (estimates in days):
+
+| # | Task | Spec | Depends on | Estimate |
+|---|---|---|---|---|
+| 1 | Data model, enums, DB choice, migration | 1–3 | – | 0.5 |
+| 2 | Indexes and repeatable 100k seed script | 1, 6 | 1 | 0.5 |
+| 3 | List endpoint: paging, filters, search, sort, aggregations | 1 | 1 | 1 |
+| 4 | Status update: transitions, 404/409, concurrency | 2 | 1 | 1 |
+| 5 | Audit and history endpoint | 3 | 4 | 0.5 |
+| 6 | Bulk endpoint and documented behavior | 4 | 4, 5 | 0.5 |
+| 7 | Global error handling (ProblemDetails) and logging | 10 | 3–6 | 0.5 |
+| 8 | Cache, invalidation and multi-instance note | 7 | 3, 4 | 0.5 |
+| 9 | Angular: service, list, UI states, debounce and cancellation | 5 | 3 | 1.5 |
+| 10 | Angular: status update, 409, history, statistics | 5 | 4, 5, 9 | 1 |
+| 11 | Integration tests (4+) | 8 | 3–5 | 1 |
+| 12 | Performance measurement and report | 6 | 2, 3 | 0.5 |
+| 13 | Documentation, run instructions, AI usage | 11 | all | 0.5 |
+
+Critical path: 1 → 4 → 5 → 10. After task 1, the backend queries (3), the UI skeleton (9) and the DB scripts (2) can proceed in parallel.
 
 ## Documentation
 
